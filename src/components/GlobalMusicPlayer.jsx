@@ -1,6 +1,6 @@
 // src/components/GlobalMusicPlayer.jsx
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { useAppStore } from '../store';
+import { useAppStore } from '../store'; // Assuming your store is exported as useAppStore
 
 // Helper to format time (e.g., 0:00)
 const formatTime = (timeInSeconds) => {
@@ -12,112 +12,171 @@ const formatTime = (timeInSeconds) => {
 };
 
 function GlobalMusicPlayer() {
-  const { beat, isPlaying, volume, progress, duration, showPlayer } = useAppStore((state) => state.globalPlayerState);
-  const {
-    togglePlayerPlayPause,
-    setPlayerVolume,
-    updatePlayerTime,
-    seekPlayerToProgress,
-    hidePlayer,
-    // playNextBeat, // For future "next" button functionality
-    // playPreviousBeat, // For future "previous" button functionality
-  } = useAppStore((state) => state); // Accessing actions directly
+  // Select necessary state slices and actions from Zustand for efficiency
+  const globalPlayerState = useAppStore((state) => state.globalPlayerState);
+  const { beat, isPlaying, volume, progress, currentTime, duration, showPlayer } = globalPlayerState;
+
+  const togglePlayerPlayPause = useAppStore((state) => state.togglePlayerPlayPause);
+  const setPlayerVolume = useAppStore((state) => state.setPlayerVolume);
+  const updatePlayerTime = useAppStore((state) => state.updatePlayerTime);
+  const seekPlayerToProgress = useAppStore((state) => state.seekPlayerToProgress);
+  const hidePlayer = useAppStore((state) => state.hidePlayer);
+  // const playNextBeat = useAppStore((state) => state.playNextBeat); // For future
 
   const audioRef = useRef(null);
-  const [isUserSeeking, setIsUserSeeking] = useState(false);
+  const [isUserSeeking, setIsUserSeeking] = useState(false); // Local UI state for when user is dragging the progress bar
 
-  // Effect to handle audio source changes and play/pause commands from store
+  // Effect 1: Handle changes to the beat source and play/pause state from the store
   useEffect(() => {
     const audioElement = audioRef.current;
-    if (!audioElement || !beat?.audioSrc) return;
+    if (!audioElement) return;
 
-    // If the beat source has changed, update it and load
-    if (audioElement.src !== window.location.origin + beat.audioSrc) { // Ensure absolute path for comparison
-      console.log("GlobalMusicPlayer: New beat source -", beat.audioSrc);
-      audioElement.src = beat.audioSrc;
-      audioElement.load(); // Important to load the new source
-    }
+    if (beat && beat.audioSrc) {
+      const audioOrigin = window.location.origin; // For constructing absolute URL if needed
+      const newAudioSrc = beat.audioSrc.startsWith('/') ? audioOrigin + beat.audioSrc : beat.audioSrc;
 
-    // Handle play/pause based on store state
-    if (isPlaying) {
-      audioElement.play().catch(e => console.warn("GlobalMusicPlayer: Audio play failed or interrupted.", e));
+      if (audioElement.src !== newAudioSrc) {
+        console.log("GlobalMusicPlayer: Setting new audio source -", newAudioSrc);
+        audioElement.src = newAudioSrc;
+        audioElement.load(); // Important to load the new source
+        // Duration might become 0 or NaN until metadata loads for new src
+        // updatePlayerTime(0, beat.durationSeconds || 0); // Optionally reset time display
+      }
+
+      // Handle play/pause based on store's isPlaying state
+      if (isPlaying) {
+        // Check if ready to play, then play
+        if (audioElement.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA || audioElement.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+            audioElement.play().catch(e => console.warn("GlobalMusicPlayer: Audio play() failed.", e));
+        }
+        // If not ready, the onCanPlay handler will attempt to play
+      } else {
+        audioElement.pause();
+      }
     } else {
+      // No beat, ensure audio is paused and source is cleared
       audioElement.pause();
+      audioElement.src = "";
     }
-  }, [beat?.audioSrc, isPlaying]); // Dependency on beat.audioSrc ensures this runs when the beat changes
+  }, [beat, isPlaying]); // React to changes in the beat object itself or isPlaying state
 
-  // Effect to handle volume changes from store
+  // Effect 2: Handle volume changes from the store
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.volume = volume;
     }
   }, [volume]);
 
-  // Effect to handle seeking when progress changes in store (e.g., from clicking progress bar)
-  // This effect runs if the user is NOT actively dragging the seek bar.
+  // Effect 3: Handle programmatic seeking (when store.progress changes NOT by this component's slider drag)
   useEffect(() => {
     const audioElement = audioRef.current;
-    if (audioElement && beat && isFinite(duration) && duration > 0 && !isUserSeeking) {
-      const targetTime = progress * duration;
-      // Only update if the difference is significant, to avoid fighting with onTimeUpdate
-      if (Math.abs(audioElement.currentTime - targetTime) > 0.5) {
+    if (audioElement && beat && isFinite(globalPlayerState.duration) && globalPlayerState.duration > 0 && !isUserSeeking) {
+      const targetTime = globalPlayerState.progress * globalPlayerState.duration;
+      // Only seek if the difference is significant to avoid fighting with onTimeUpdate
+      if (Math.abs(audioElement.currentTime - targetTime) > 0.5) { // 0.5s tolerance
+        console.log(`GlobalMusicPlayer: Programmatic seek to progress ${globalPlayerState.progress} (time: ${targetTime.toFixed(2)}s)`);
         audioElement.currentTime = targetTime;
       }
     }
-  }, [progress, beat?.id, duration, isUserSeeking]); // Listen to progress changes from store
+  }, [globalPlayerState.progress, beat?.id, globalPlayerState.duration, isUserSeeking]);
 
-  // --- HTMLAudioElement Event Handlers ---
-  const onLoadedMetadata = useCallback(() => {
-    if (audioRef.current && isFinite(audioRef.current.duration)) {
-      updatePlayerTime(audioRef.current.currentTime, audioRef.current.duration);
+
+  // --- HTMLAudioElement Event Handlers (memoized with useCallback) ---
+  const handleLoadedMetadata = useCallback(() => {
+    const audioElement = audioRef.current;
+    if (audioElement && isFinite(audioElement.duration)) {
+      console.log("GlobalMusicPlayer: Metadata loaded. Duration:", audioElement.duration);
+      updatePlayerTime(audioElement.currentTime, audioElement.duration);
     }
   }, [updatePlayerTime]);
 
-  const onTimeUpdate = useCallback(() => {
-    if (audioRef.current && isFinite(audioRef.current.duration) && audioRef.current.duration > 0 && !isUserSeeking) {
-      updatePlayerTime(audioRef.current.currentTime, audioRef.current.duration);
+  const handleTimeUpdate = useCallback(() => {
+    const audioElement = audioRef.current;
+    // Only update store if user is NOT actively seeking with this component's slider
+    if (audioElement && isFinite(audioElement.duration) && audioElement.duration > 0 && !isUserSeeking) {
+      updatePlayerTime(audioElement.currentTime, audioElement.duration);
     }
   }, [updatePlayerTime, isUserSeeking]);
 
-  const onEnded = useCallback(() => {
+  const handleAudioEnded = useCallback(() => {
     console.log("GlobalMusicPlayer: Beat ended.");
-    togglePlayerPlayPause(); // Toggles to paused state, or implement play next
-    // Or: playNextBeat(); 
-  }, [togglePlayerPlayPause]);
+    if (isPlaying) { // If it was playing and ended, toggle to paused state
+        togglePlayerPlayPause();
+    }
+    // Reset progress to the beginning. The player component will reflect this via its useEffect on progress.
+    seekPlayerToProgress(0); 
+    // Future: playNextBeat();
+  }, [togglePlayerPlayPause, seekPlayerToProgress, isPlaying]);
 
-  const onCanPlay = useCallback(() => {
-    if (audioRef.current && isPlaying) {
-        audioRef.current.play().catch(e => console.warn("GlobalMusicPlayer: onCanPlay auto-play failed.", e));
+  const handleCanPlay = useCallback(() => {
+    const audioElement = audioRef.current;
+    // If the store state says it should be playing, and audio is now ready, play it.
+    if (audioElement && isPlaying) {
+      audioElement.play().catch(e => console.warn("GlobalMusicPlayer: onCanPlay auto-play failed or interrupted.", e));
     }
   }, [isPlaying]);
 
+  const handleAudioError = useCallback((e) => {
+    console.error("GlobalMusicPlayer Audio Error:", e, audioRef.current?.error);
+    // You could dispatch an action to the store to show an error message to the user.
+    // Example: showErrorNotification("Error playing beat: " + beat?.title);
+  }, []);
+
 
   // --- User Interaction Handlers for Progress Bar ---
-  const handleProgressChange = (e) => {
+  const handleProgressSliderChange = (e) => { // While dragging
     const newProgress = parseFloat(e.target.value);
-    seekPlayerToProgress(newProgress); // Update store's progress idea
-    // If live seeking is desired while dragging:
-    if (audioRef.current && isFinite(duration) && duration > 0) {
-       audioRef.current.currentTime = newProgress * duration;
+    if (isUserSeeking && audioRef.current && isFinite(duration) && duration > 0) {
+      // Update local display time immediately for responsiveness
+      const newCurrentTime = newProgress * duration;
+      // Optionally, update store's currentTime for visual feedback if your span reads from store.currentTime directly
+      // For this setup, the input range value directly reflects the drag.
+      // The final update to store.progress happens onMouseUp.
+      // To make the time display update live: updatePlayerTime(newCurrentTime, duration);
+      // However, this can make the store noisy. Better to let the input value control visual.
     }
   };
+  
+  const handleProgressMouseDown = () => {
+    setIsUserSeeking(true);
+    // Optional: Pause playback while seeking for a smoother experience on some browsers/connections
+    // if (isPlaying && audioRef.current) { audioRef.current.pause(); }
+  };
 
+  const handleProgressMouseUp = (e) => {
+    const audioElement = audioRef.current;
+    if (!audioElement || !isFinite(duration) || duration <= 0) {
+        setIsUserSeeking(false);
+        return;
+    }
+    const newProgress = parseFloat(e.target.value);
+    audioElement.currentTime = newProgress * duration; // Set the audio time
+    seekPlayerToProgress(newProgress); // Update the store with the final progress
+    
+    setIsUserSeeking(false);
+    // If it was playing before seeking, resume playback
+    // if (isPlaying && audioElement) { audioElement.play().catch(e => console.warn(e)); }
+  };
+
+
+  // --- Render Logic ---
   if (!showPlayer || !beat) {
     return null; // Don't render if hidden or no beat is loaded
   }
 
   return (
-    <div className="global-music-player"> {/* Add layout-stacked class here if you prefer that CSS layout */}
+    <div className="global-music-player"> {/* Consider adding 'layout-stacked' class via CSS if you prefer that layout */}
       <audio
         ref={audioRef}
-        onLoadedMetadata={onLoadedMetadata}
-        onTimeUpdate={onTimeUpdate}
-        onEnded={onEnded}
+        onLoadedMetadata={handleLoadedMetadata}
+        onTimeUpdate={handleTimeUpdate}
+        onEnded={handleAudioEnded}
         onCanPlay={onCanPlay}
-        // onError={(e) => console.error("Audio Error:", e)}
+        onError={handleAudioError}
+        preload="metadata" // Good default, browsers may upgrade to "auto"
       />
       <div className="player-artwork">
-        <img src={beat.artworkSrc || '/artworks/default_artwork.jpg'} alt={beat.title} />
+        <img src={beat.artworkSrc || '/artworks/default_artwork.jpg'} alt={`Artwork for ${beat.title}`} />
       </div>
       <div className="player-info-progress">
         <div className="player-text-info">
@@ -125,33 +184,32 @@ function GlobalMusicPlayer() {
           <p>{beat.genre}</p> {/* Or Artist Name if available */}
         </div>
         <div className="progress-bar-container">
-          <span>{formatTime(get().globalPlayerState.currentTime)}</span>
+          <span aria-label="Current time">{formatTime(isUserSeeking ? progress * duration : currentTime)}</span>
           <input
             type="range"
             min="0"
             max="1"
-            step="0.001"
-            value={progress} // Controlled by store state
-            onMouseDown={() => setIsUserSeeking(true)}
-            onChange={handleProgressChange} // Handles visual update and actual seek
-            onMouseUp={() => setIsUserSeeking(false)}
+            step="0.001" // Finer steps for smoother seeking
+            value={progress} // Always reflects store state for consistency
+            onMouseDown={handleProgressMouseDown}
+            onChange={handleProgressSliderChange} // Handles visual feedback during drag
+            onMouseUp={handleProgressMouseUp}   // Handles final seek and store update
             className="progress-bar"
             title="Seek"
             aria-label="Playback progress"
           />
-          <span>{formatTime(duration)}</span>
+          <span aria-label="Total duration">{formatTime(duration)}</span>
         </div>
       </div>
       <div className="player-main-controls-volume">
         <div className="player-main-controls">
-          {/* <button title="Previous"> PREV </button> // Placeholder for future */}
-          <button onClick={togglePlayerPlayPause} title={isPlaying ? 'Pause' : 'Play'}>
+          {/* Add Previous/Next buttons here in the future if desired */}
+          <button onClick={togglePlayerPlayPause} title={isPlaying ? 'Pause' : 'Play'} aria-pressed={isPlaying}>
             {isPlaying ? '❚❚' : '▶'}
           </button>
-          {/* <button title="Next"> NEXT </button> // Placeholder for future */}
         </div>
         <div className="player-volume-control">
-          {/* Volume Icon Placeholder */}
+          {/* Consider adding a volume icon here */}
           <input
             type="range"
             min="0"
@@ -169,4 +227,4 @@ function GlobalMusicPlayer() {
   );
 }
 
-export default React.memo(GlobalMusicPlayer); // Memoize as it might re-render often due to time updates
+export default React.memo(GlobalMusicPlayer);

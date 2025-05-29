@@ -8,7 +8,7 @@ import { devtools } from 'zustand/middleware'; // Optional: for Redux DevTools
 const initialBeatsData = [
   { 
     id: 'beat001', 
-    title: 'Oathsworn Echo', 
+    title: 'BEAT NUMERO 1', 
     genre: 'Epic Orchestral', 
     mood: ['cinematic', 'intense', 'heroic'], 
     bpm: 155, 
@@ -18,7 +18,7 @@ const initialBeatsData = [
       premium: { name: 'Premium Lease', price: 89.99, details: "MP3 + WAV + Stems. Non-exclusive. Sell up to 10,000 units. Streaming up to 1,000,000." }, 
       exclusive: { name: 'Exclusive Rights', price: 349.99, details: "Full ownership with Stems. Beat removed from store after purchase." } 
     }, 
-    audioSrc: '/audio/beat001_preview.mp3', // e.g., public/audio/beat001_preview.mp3
+    audioSrc: '/audio/WDR.mp3', // e.g., public/audio/beat001_preview.mp3
     artworkSrc: '/artworks/beat001.jpg',   // e.g., public/artworks/beat001.jpg
     featured: true, 
     durationSeconds: 190 // Approximate duration in seconds for the player
